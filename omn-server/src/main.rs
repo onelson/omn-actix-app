@@ -88,8 +88,19 @@ impl ResponseError for OmnError {
 /// Convenience type alias to encourage the use of *our error type*.
 type Result<T> = std::result::Result<T, OmnError>;
 
-async fn info(_settings: web::Data<Settings>) -> Result<HttpResponse> {
-    unimplemented!();
+async fn info(settings: web::Data<Settings>) -> Result<HttpResponse> {
+    // Since `Settings` derives `serde::Serialize` it can be converted to json
+    // automatically.
+    //
+    // To write it to the response body, we do have to do a funky little
+    // dance to reach inside the `Data`/`Arc` wrappers that allow this data to
+    // be shared around the app.
+    // The `into_inner()` gets the `Arc` out of the `Data`. We then use `*` to
+    // *deref* the `Arc` so we can get at the underlying `Settings`, but we still
+    // need to `&` it so we don't try to *move* the data.
+    // The `Arc` permits us to have *many readers*, but we still need to be sure
+    // we don't *move*.
+    Ok(HttpResponse::Ok().json(&*settings.into_inner()))
 }
 
 #[actix_web::main]
