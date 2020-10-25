@@ -1027,6 +1027,9 @@ checksum = "37fd5004feb2ce328a52b0b3d01dbf4ffff72583493900ed15f22d4111c51693"
 [[package]]
 name = "omn-core"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "omn-server"
@@ -1037,6 +1040,7 @@ dependencies = [
  "dotenv",
  "env_logger",
  "log",
+ "omn-core",
  "serde",
  "serde_json",
  "thiserror",

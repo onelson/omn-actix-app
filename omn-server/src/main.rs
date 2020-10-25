@@ -3,7 +3,9 @@ use actix_web::error::ResponseError;
 use actix_web::http::StatusCode;
 use actix_web::middleware::Logger;
 use actix_web::{web, App, HttpResponse, HttpServer};
+use omn_core::fakes;
 use serde::Serialize;
+use serde_json::json;
 
 /// This type is shared with handlers by way of the `Data` extractor.
 /// <https://docs.rs/actix-web/3.1.0/actix_web/web/struct.Data.html>
@@ -17,15 +19,7 @@ use serde::Serialize;
 struct Settings {
     host: String,
     port: u16,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Settings {
-            host: String::from("0.0.0.0"),
-            port: 7878,
-        }
-    }
+    db_url: String,
 }
 
 impl Settings {
@@ -38,14 +32,12 @@ impl Settings {
     /// There's probably a crate to help do this but we usually just do it by
     /// hand.
     pub fn from_env() -> Settings {
-        let mut settings = Settings::default();
-        if let Ok(host) = std::env::var("HOST") {
-            settings.host = host;
-        }
-        if let Ok(port) = std::env::var("PORT").map(|s| s.parse().expect("PORT")) {
-            settings.port = port;
-        }
-        settings
+        let host = std::env::var("HOST").unwrap_or_else(|_| String::from("0.0.0.0"));
+
+        let port: u16 = std::env::var("PORT").map_or_else(|_e| 7878, |s| s.parse().expect("PORT"));
+
+        let db_url = std::env::var("DB_URL").expect("DB_URL");
+        Settings { host, port, db_url }
     }
 }
 
@@ -57,8 +49,11 @@ enum OmnError {
     // This error attribute is used to generate an implementation of the
     // `Display` trait, which is required to be compatible with actix-web's
     // `ResponseError` trait.
+    //
+    // The `#[from] attribute adds the boilerplate required to automatically
+    // convert an `omn_core::fakes::database::DbError` into an `OmnError`.
     #[error("Some kind of DB problem.")]
-    Database,
+    Database(#[from] omn_core::fakes::database::DbError),
     #[error("Very Unlucky!")]
     Unlucky,
 }
@@ -73,7 +68,13 @@ enum OmnError {
 impl ResponseError for OmnError {
     fn status_code(&self) -> StatusCode {
         match self {
-            Self::Database => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Database(err) => {
+                // We don't want the details of the error being presented to the
+                // outside world, but we may want to log it.
+                // The `err` here is the original `DbError` from `omn_core`.
+                log::error!("{}", err);
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
             Self::Unlucky => StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
         }
     }
@@ -103,6 +104,14 @@ async fn info(settings: web::Data<Settings>) -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().json(&*settings.into_inner()))
 }
 
+async fn get_records(settings: web::Data<Settings>) -> Result<HttpResponse> {
+    // So long as we have a `From` defined for `OmnError` from this db lib's own
+    // Error type, we can use `?` in here.
+    let conn = fakes::database::get_connection(&settings.db_url)?;
+    let results: Vec<i32> = fakes::database::run_query(&conn, "give me some numbers")?;
+    Ok(HttpResponse::Ok().json(json!({ "data": results })))
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     dotenv::dotenv().ok();
@@ -121,6 +130,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .app_data(data.clone())
             .wrap(Logger::default())
+            .route("/db", web::get().to(get_records))
             .route("/", web::get().to(info))
     })
     .bind(format!("{}:{}", &settings.host, &settings.port))?
